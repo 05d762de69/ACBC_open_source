@@ -1,0 +1,38 @@
+name: "Decision-Making Under Risk Preferences"
+description: >
+  A simple demo survey exploring preferences when making decisions under risk.
+  Attributes cover potential upside, rewardvariability, worst-case outcome, and timing.
+
+attributes:
+  - name: Reward Size
+    levels:
+      - "30"
+      - "60"
+      - "120"
+
+  - name: Reward Variability
+    levels:
+      - Low (outcomes stay close to the expected value)
+      - Moderate (outcomes can swing moderately)
+      - High (outcomes can swing widely)
+
+  - name: Worst Case Outcome
+    levels:
+      - "0"
+      - "-25"
+      - "-75"
+
+  - name: Timing
+    levels:
+      - immediately
+      - in one month
+      - in three months
+
+settings:
+  screening_pages: 5
+  scenarios_per_page: 4
+  max_unacceptable_questions: 4
+  max_must_have_questions: 3
+  choice_tournament_size: 3
+  unacceptable_threshold: 0.75
+  must_have_threshold: 0.90

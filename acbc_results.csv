@@ -1,0 +1,27 @@
+type,attribute,level,value
+utility,Brand,Apple,1.9510
+utility,Brand,Dell,-0.4623
+utility,Brand,Lenovo,-0.6505
+utility,Brand,HP,-0.8382
+utility,Price,$499,0.2624
+utility,Price,$799,-0.6538
+utility,Price,$1099,0.3354
+utility,Price,$1399,0.0560
+utility,RAM,8GB,0.4340
+utility,RAM,16GB,-0.6516
+utility,RAM,32GB,0.2175
+utility,Storage,256GB SSD,-0.2594
+utility,Storage,512GB SSD,0.3178
+utility,Storage,1TB SSD,-0.0585
+utility,Screen Size,13 inch,0.6486
+utility,Screen Size,15 inch,0.0928
+utility,Screen Size,17 inch,-0.7414
+utility,Battery Life,6 hours,-0.2548
+utility,Battery Life,10 hours,-0.0530
+utility,Battery Life,14 hours,0.3078
+importance,Brand,,37.72
+importance,Price,,13.38
+importance,RAM,,14.68
+importance,Storage,,7.81
+importance,Screen Size,,18.80
+importance,Battery Life,,7.61
