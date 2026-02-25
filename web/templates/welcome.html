@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome — ACBC Survey{% endblock %}
+
+{% block content %}
+<div class="welcome-panel">
+  <h1>{{ config.name }}</h1>
+  <p class="description">{{ config.description }}</p>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <span class="info-label">Attributes</span>
+      <span class="info-value">{{ config.attributes | length }}</span>
+    </div>
+    <div class="info-card">
+      <span class="info-label">Stages</span>
+      <span class="info-value">3</span>
+    </div>
+    <div class="info-card">
+      <span class="info-label">Screening pages</span>
+      <span class="info-value">{{ config.settings.screening_pages }}</span>
+    </div>
+  </div>
+
+  <div class="stages-overview">
+    <h2>Survey stages</h2>
+    <ol>
+      <li><strong>Build Your Own</strong> — pick your preferred level for each attribute</li>
+      <li><strong>Screening</strong> — evaluate options based on your preferences</li>
+      <li><strong>Choice Tournament</strong> — choose your favourite from shortlisted options</li>
+    </ol>
+  </div>
+
+  <form action="/start" method="post">
+    <button type="submit" class="btn btn-primary btn-large">Start Survey</button>
+  </form>
+</div>
+{% endblock %}

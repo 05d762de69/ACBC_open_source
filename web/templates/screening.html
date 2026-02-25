@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Screening — ACBC Survey{% endblock %}
+
+{% block progress %}
+<div class="progress-bar">
+  <div class="progress-fill" style="width: {{ progress }}%"></div>
+</div>
+<div class="stage-label">Screening — Page {{ question.page_number }} of {{ question.total_pages }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="question-panel">
+  <h1>Evaluate these options</h1>
+  <p class="hint">For each option, indicate whether it is a possibility for you or won't work.</p>
+
+  <form action="/answer" method="post">
+    <div class="scenario-grid">
+      {% for scenario in question.scenarios %}
+      <div class="scenario-card">
+        <h3>Option {{ loop.index }}</h3>
+        <table class="scenario-table">
+          {% for attr_name in attr_names %}
+          <tr>
+            <td class="attr-name">{{ attr_name }}</td>
+            <td class="attr-value">{{ scenario.levels[attr_name] }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        <div class="accept-reject">
+          <label class="radio-pill radio-accept">
+            <input type="radio" name="scenario_{{ loop.index0 }}" value="accept" required>
+            <span>A possibility</span>
+          </label>
+          <label class="radio-pill radio-reject">
+            <input type="radio" name="scenario_{{ loop.index0 }}" value="reject">
+            <span>Won't work</span>
+          </label>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Next</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,495 @@
+/* ── ACBC Survey — Minimal Stylesheet ─────────────────────────── */
+
+:root {
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-text: #1a1a2e;
+  --color-text-muted: #6b7280;
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-success: #059669;
+  --color-success-hover: #047857;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-border: #e5e7eb;
+  --color-accent: #eef2ff;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+/* ── Progress bar ────────────────────────────────────────────── */
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.stage-label {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+}
+
+/* ── Panels ──────────────────────────────────────────────────── */
+
+.welcome-panel,
+.question-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 2.5rem;
+  margin-bottom: 2rem;
+}
+
+.welcome-panel h1,
+.question-panel h1 {
+  font-size: 1.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.description {
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+  font-size: 1.05rem;
+}
+
+.hint {
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+}
+
+/* ── Info grid (welcome page) ────────────────────────────────── */
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.info-card {
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  text-align: center;
+}
+
+.info-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.info-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.stages-overview {
+  margin-bottom: 2rem;
+}
+
+.stages-overview h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.stages-overview ol {
+  padding-left: 1.25rem;
+}
+
+.stages-overview li {
+  margin-bottom: 0.35rem;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+}
+
+.btn-secondary {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.btn-secondary:hover {
+  background: #d1d5db;
+}
+
+.btn-success {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.btn-success:hover {
+  background: var(--color-success-hover);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: var(--color-danger-hover);
+}
+
+.btn-large {
+  padding: 1rem 2.5rem;
+  font-size: 1.1rem;
+}
+
+/* ── BYO option list ─────────────────────────────────────────── */
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.option-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.option-card:hover {
+  border-color: var(--color-primary);
+  background: var(--color-accent);
+}
+
+.option-card input[type="radio"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: var(--color-primary);
+}
+
+.option-card:has(input:checked) {
+  border-color: var(--color-primary);
+  background: var(--color-accent);
+}
+
+.option-text {
+  font-size: 1.05rem;
+}
+
+/* ── Scenario grid (screening + choice) ──────────────────────── */
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  min-width: 0;
+}
+
+.scenario-grid > * {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.scenario-card {
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.scenario-card h3 {
+  font-size: 0.95rem;
+  color: var(--color-primary);
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+
+.scenario-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+.scenario-table tr {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scenario-table tr:last-child {
+  border-bottom: none;
+}
+
+.scenario-table td {
+  padding: 0.3rem 0.2rem;
+  font-size: 0.8rem;
+  word-break: break-word;
+}
+
+.attr-name {
+  font-weight: 600;
+  color: var(--color-text-muted);
+  width: 45%;
+}
+
+.attr-value {
+  text-align: right;
+}
+
+/* ── Accept / reject pills ───────────────────────────────────── */
+
+.accept-reject {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.radio-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.radio-pill input[type="radio"] {
+  display: none;
+}
+
+.radio-accept:has(input:checked) {
+  border-color: var(--color-success);
+  background: #ecfdf5;
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.radio-reject:has(input:checked) {
+  border-color: var(--color-danger);
+  background: #fef2f2;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.radio-pill:hover {
+  border-color: var(--color-text-muted);
+}
+
+/* ── Choice cards (selectable) ───────────────────────────────── */
+
+.scenario-choice .scenario-card {
+  cursor: pointer;
+}
+
+.scenario-selectable {
+  display: block;
+}
+
+.scenario-selectable input[type="radio"] {
+  display: none;
+}
+
+.scenario-selectable:has(input:checked) .card-inner {
+  /* visual feedback handled by parent border */
+}
+
+.scenario-selectable:has(input:checked) {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-accent);
+}
+
+.scenario-selectable:hover {
+  border-color: var(--color-primary);
+}
+
+.scenario-selectable .card-inner h3 {
+  margin-bottom: 0.75rem;
+}
+
+/* ── Rule check ──────────────────────────────────────────────── */
+
+.rule-panel {
+  text-align: center;
+}
+
+.rule-icon {
+  font-size: 2.5rem;
+  width: 4rem;
+  height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+}
+
+.rule-unacceptable {
+  background: #fef2f2;
+  color: var(--color-danger);
+}
+
+.rule-musthave {
+  background: #ecfdf5;
+  color: var(--color-success);
+}
+
+.highlighted-level {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 1rem 2rem;
+  border-radius: var(--radius-sm);
+  margin: 1rem 0;
+}
+
+.level-negative {
+  background: #fef2f2;
+  border: 2px solid var(--color-danger);
+}
+
+.level-positive {
+  background: #ecfdf5;
+  border: 2px solid var(--color-success);
+}
+
+.level-attr {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.level-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.rule-buttons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+/* ── Complete page ───────────────────────────────────────────── */
+
+.complete-panel {
+  text-align: center;
+}
+
+.complete-icon {
+  font-size: 2.5rem;
+  width: 4rem;
+  height: 4rem;
+  background: #ecfdf5;
+  color: var(--color-success);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+}
+
+.winner-card {
+  display: inline-block;
+  background: var(--color-accent);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0 1.5rem;
+  text-align: left;
+}
+
+.winner-card .attr-name {
+  padding-right: 1.5rem;
+}
+
+.data-note {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+.data-note code {
+  background: var(--color-accent);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+
+footer {
+  text-align: center;
+  padding: 2rem 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}

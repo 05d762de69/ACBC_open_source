@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Build Your Own — ACBC Survey{% endblock %}
+
+{% block progress %}
+<div class="progress-bar">
+  <div class="progress-fill" style="width: {{ progress }}%"></div>
+</div>
+<div class="stage-label">Build Your Own — Participant {{ participant_id }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="question-panel">
+  <h1>{{ question.prompt }}</h1>
+  <p class="hint">Select the <strong>{{ question.attribute.name }}</strong> you prefer most.</p>
+
+  <form action="/answer" method="post">
+    <div class="option-list">
+      {% for level in question.attribute.levels %}
+      <label class="option-card">
+        <input type="radio" name="level" value="{{ level }}" required>
+        <span class="option-text">{{ level }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Next</button>
+  </form>
+</div>
+{% endblock %}

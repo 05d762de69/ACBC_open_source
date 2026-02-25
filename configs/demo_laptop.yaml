@@ -4,30 +4,35 @@ description: >
   Attributes cover potential upside, rewardvariability, worst-case outcome, and timing.
 
 attributes:
-  - name: Reward Size
+  - name: Gain Amount
     levels:
-      - "30"
-      - "60"
-      - "120"
+      - "€20"
+      - "€60"
+      - "€120"
+      - "€240"
 
-  - name: Reward Variability
+  - name: Loss Amount (Worst-Case Outcome)
     levels:
-      - Low (outcomes stay close to the expected value)
-      - Moderate (outcomes can swing moderately)
-      - High (outcomes can swing widely)
+      - "€0"
+      - "−€20"
+      - "−€60"
+      - "−€120"
 
-  - name: Worst Case Outcome
+  - name: Probability of Gain
     levels:
-      - "0"
-      - "-25"
-      - "-75"
+      - "20%"
+      - "40%"
+      - "60%"
+      - "80%"
 
-  - name: Timing
+  - name: Delay of Outcome
     levels:
-      - immediately
-      - in one month
-      - in three months
+      - Immediate
+      - In 1 week
+      - 1 month
+      - 3 months
 
+# These can be changed to fit the needs of the survey
 settings:
   screening_pages: 5
   scenarios_per_page: 4

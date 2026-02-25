@@ -1,7 +1,7 @@
 """
 CLI frontend for the ACBC survey engine.
 
-Uses *questionary* for keyboard-driven prompts and *rich* for formatted
+Uses questionary for keyboard-driven prompts and rich for formatted
 output (tables, panels, progress indicators).
 
 This module is the **only** place that depends on terminal I/O — the engine
@@ -35,10 +35,11 @@ from acbc.models import (
 )
 from acbc.analysis import (
     AnalysisResult,
+    analyze_bayesian_logit,
     analyze_counts,
-    analyze_hb,
     analyze_monotone,
 )
+from acbc.io import save_raw_results, save_analysis_results
 
 # Rich console for pretty output
 console = Console()
@@ -58,7 +59,6 @@ SURVEY_STYLE = Style(
 # =====================================================================
 # Scenario rendering
 # =====================================================================
-
 
 def _render_scenario_table(
     scenarios: list[Scenario],
@@ -89,11 +89,9 @@ def _render_scenario_table(
 
     return table
 
-
 # =====================================================================
 # Question handlers
 # =====================================================================
-
 
 def _ask_byo(question: BYOQuestion) -> str:
     """Handle a Build-Your-Own question."""
@@ -117,7 +115,6 @@ def _ask_byo(question: BYOQuestion) -> str:
         sys.exit(0)
 
     return answer
-
 
 def _ask_screening(
     question: ScreeningQuestion,
@@ -160,7 +157,6 @@ def _ask_screening(
 
     return responses
 
-
 def _ask_unacceptable(question: UnacceptableQuestion) -> bool:
     """Confirm whether a level is truly unacceptable."""
     console.print()
@@ -187,7 +183,6 @@ def _ask_unacceptable(question: UnacceptableQuestion) -> bool:
         sys.exit(0)
 
     return answer
-
 
 def _ask_must_have(question: MustHaveQuestion) -> bool:
     """Confirm whether a level is a must-have."""
@@ -255,7 +250,6 @@ def _ask_choice(question: ChoiceQuestion, attribute_names: list[str]) -> int:
 # Results display
 # =====================================================================
 
-
 def _display_results(result: AnalysisResult, config: SurveyConfig) -> None:
     """Display analysis results with tables and ASCII bar charts."""
     console.print()
@@ -306,7 +300,7 @@ def _display_results(result: AnalysisResult, config: SurveyConfig) -> None:
         )
         table.add_column("Level", min_width=16)
         table.add_column("Utility", justify="right", min_width=10)
-        if result.method == "hb":
+        if result.method in ("bayesian_logit", "hb"):
             table.add_column("Std Dev", justify="right", min_width=10)
 
         # Sort by utility descending
@@ -314,7 +308,7 @@ def _display_results(result: AnalysisResult, config: SurveyConfig) -> None:
         for lv, util, std in entries:
             style = "green" if util > 0 else ("red" if util < 0 else "")
             row = [lv, f"{util:+.4f}"]
-            if result.method == "hb" and std is not None:
+            if result.method in ("bayesian_logit", "hb") and std is not None:
                 row.append(f"{std:.4f}")
             table.add_row(*row, style=style)
 
@@ -332,7 +326,6 @@ def _display_results(result: AnalysisResult, config: SurveyConfig) -> None:
             lv = result.predicted_winner.get(attr_name, "—")
             table.add_row(attr_name, lv)
         console.print(table)
-
 
 def _display_winner(winner: Scenario | None, config: SurveyConfig) -> None:
     """Show the tournament winner."""
@@ -357,13 +350,33 @@ def _display_winner(winner: Scenario | None, config: SurveyConfig) -> None:
         table.add_row(attr_name, winner.levels.get(attr_name, "—"))
     console.print(table)
 
+# =====================================================================
+# Participant ID generation
+# =====================================================================
+
+def _next_participant_id(data_dir: Path) -> str:
+    """Generate the next sequential participant ID (P001, P002, …)."""
+    raw_dir = data_dir / "raw"
+    highest = 0
+    if raw_dir.is_dir():
+        for f in raw_dir.glob("*.json"):
+            name = f.stem
+            prefix = name.split("_")[0]
+            if prefix.startswith("P") and prefix[1:].isdigit():
+                highest = max(highest, int(prefix[1:]))
+    return f"P{highest + 1:03d}"
 
 # =====================================================================
 # Main survey runner
 # =====================================================================
 
-
-def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
+def run_survey(
+    config_path: str | Path,
+    *,
+    seed: int | None = None,
+    participant_id: str | None = None,
+    output_dir: str | Path | None = None,
+) -> None:
     """
     Run a complete ACBC survey in the terminal.
 
@@ -371,10 +384,17 @@ def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
     ----------
     config_path : path to YAML config file
     seed : random seed for reproducibility
+    participant_id : unique identifier for this respondent (prompted if None)
+    output_dir : directory for saving data (default: ``./data``)
     """
     config = SurveyConfig.from_yaml(config_path)
     engine = ACBCEngine(config, seed=seed)
     attr_names = [a.name for a in config.attributes]
+    data_dir = Path(output_dir) if output_dir else Path("data")
+
+    # Participant ID — auto-generate the next sequential number
+    if not participant_id:
+        participant_id = _next_participant_id(data_dir)
 
     # Welcome
     console.print()
@@ -383,6 +403,7 @@ def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
             f"[bold]Welcome to the ACBC Survey[/bold]\n\n"
             f"[cyan]{config.name}[/cyan]\n"
             f"{config.description}\n\n"
+            f"Participant: [bold]{participant_id}[/bold]\n\n"
             f"This survey has {len(config.attributes)} attributes and will guide you through\n"
             f"three stages: Build Your Own, Screening, and Choice Tasks.\n\n"
             f"Use [bold]arrow keys[/bold] to navigate and [bold]Enter[/bold] to select.",
@@ -420,9 +441,18 @@ def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
     # Results
     results = engine.get_results()
 
+    # ── Auto-save raw data ──────────────────────────────────────────
+    raw_path = save_raw_results(
+        results, participant_id, data_dir, seed=seed, console=console,
+    )
+    if raw_path:
+        console.print(
+            f"\n[green]Raw data saved → {raw_path}[/green]"
+        )
+
     _display_winner(results["winner"], config)
 
-    # Run all three analysis methods
+    # ── Analysis ────────────────────────────────────────────────────
     console.print()
     console.print(
         Panel(
@@ -430,18 +460,19 @@ def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
             "Computing utilities with three methods:\n"
             "1. Counting-based\n"
             "2. Monotone regression\n"
-            "3. Hierarchical Bayes (MCMC)",
+            "3. Bayesian logit (MCMC)\n\n"
+            "[dim]Note: true Hierarchical Bayes requires multiple participants.\n"
+            "Run 'python main.py aggregate --method hb' after collecting data.[/dim]",
             border_style="bright_blue",
         )
     )
 
-    # Ask which analysis to show
     analysis_choice = questionary.select(
         "Which analysis method would you like to see?",
         choices=[
             questionary.Choice("Counting-based (fastest)", value="counts"),
             questionary.Choice("Monotone regression (individual-level)", value="monotone"),
-            questionary.Choice("Hierarchical Bayes (most advanced)", value="hb"),
+            questionary.Choice("Bayesian logit (single-respondent MCMC)", value="bayesian_logit"),
             questionary.Choice("All three", value="all"),
         ],
         style=SURVEY_STYLE,
@@ -453,67 +484,38 @@ def run_survey(config_path: str | Path, *, seed: int | None = None) -> None:
     methods = {
         "counts": ("Counting-based", analyze_counts),
         "monotone": ("Monotone regression", analyze_monotone),
-        "hb": ("Hierarchical Bayes", analyze_hb),
+        "bayesian_logit": ("Bayesian logit", analyze_bayesian_logit),
     }
+
+    computed_results: list[AnalysisResult] = []
 
     if analysis_choice == "all":
         for key, (name, func) in methods.items():
             console.print(f"\n[bold]--- {name} ---[/bold]")
-            if key == "hb":
+            if key == "bayesian_logit":
                 with console.status("[bold cyan]Running MCMC...[/bold cyan]"):
                     result = func(results, seed=seed)
             else:
                 result = func(results)
+            computed_results.append(result)
             _display_results(result, config)
     else:
         name, func = methods[analysis_choice]
-        if analysis_choice == "hb":
+        if analysis_choice == "bayesian_logit":
             with console.status("[bold cyan]Running MCMC...[/bold cyan]"):
                 result = func(results, seed=seed)
         else:
             result = func(results)
+        computed_results.append(result)
         _display_results(result, config)
 
-    # Offer export
-    console.print()
-    export = questionary.confirm(
-        "Would you like to export the results?",
-        default=False,
-        style=SURVEY_STYLE,
-    ).ask()
-
-    if export:
-        # Use the last computed result for export
-        export_format = questionary.select(
-            "Export format:",
-            choices=[
-                questionary.Choice("JSON", value="json"),
-                questionary.Choice("CSV", value="csv"),
-            ],
-            style=SURVEY_STYLE,
-        ).ask()
-
-        content = result.to_json() if export_format == "json" else result.to_csv()
-        suffix = ".json" if export_format == "json" else ".csv"
-        out_path = Path(f"acbc_results{suffix}")
-
-        try:
-            out_path.write_text(content)
-            console.print(f"\n[green]Results exported to {out_path.resolve()}[/green]")
-        except (OSError, TimeoutError):
-            # iCloud-synced or network folders can time out on write;
-            # fall back to a temp location, then print to stdout.
-            import tempfile
-            fallback = Path(tempfile.gettempdir()) / f"acbc_results{suffix}"
-            try:
-                fallback.write_text(content)
-                console.print(
-                    f"\n[yellow]Could not write to project directory. "
-                    f"Results saved to {fallback}[/yellow]"
-                )
-            except OSError:
-                console.print(f"\n[yellow]Could not write file. Printing results:[/yellow]")
-                console.print(content)
+    # ── Auto-save analysis results ──────────────────────────────────
+    for ar in computed_results:
+        ar_path = save_analysis_results(
+            ar, participant_id, data_dir, console=console,
+        )
+        if ar_path:
+            console.print(f"[green]Analysis ({ar.method}) saved → {ar_path}[/green]")
 
     console.print(
         "\n[bold green]Thank you for completing the survey![/bold green]\n"

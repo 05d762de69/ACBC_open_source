@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if rule_type == "unacceptable" %}Unacceptable Check{% else %}Must-Have Check{% endif %} — ACBC Survey
+{% endblock %}
+
+{% block progress %}
+<div class="progress-bar">
+  <div class="progress-fill" style="width: {{ progress }}%"></div>
+</div>
+<div class="stage-label">
+  {% if rule_type == "unacceptable" %}Unacceptable Check{% else %}Must-Have Check{% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="question-panel rule-panel">
+  {% if rule_type == "unacceptable" %}
+  <div class="rule-icon rule-unacceptable">&#10007;</div>
+  <h1>Is this unacceptable?</h1>
+  <p>You seemed to consistently avoid:</p>
+  <div class="highlighted-level level-negative">
+    <span class="level-attr">{{ question.attribute_name }}</span>
+    <span class="level-value">{{ question.level }}</span>
+  </div>
+  <p>Is this level <strong>totally unacceptable</strong> to you?</p>
+  {% else %}
+  <div class="rule-icon rule-musthave">&#10003;</div>
+  <h1>Is this a must-have?</h1>
+  <p>You consistently preferred:</p>
+  <div class="highlighted-level level-positive">
+    <span class="level-attr">{{ question.attribute_name }}</span>
+    <span class="level-value">{{ question.level }}</span>
+  </div>
+  <p>Is this a <strong>must-have</strong> for you?</p>
+  {% endif %}
+
+  <form action="/answer" method="post">
+    <div class="rule-buttons">
+      <button type="submit" name="confirmed" value="yes" class="btn {% if rule_type == 'unacceptable' %}btn-danger{% else %}btn-success{% endif %}">
+        Yes{% if rule_type == "unacceptable" %} — totally unacceptable{% else %} — must-have{% endif %}
+      </button>
+      <button type="submit" name="confirmed" value="no" class="btn btn-secondary">
+        No — I'm flexible on this
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

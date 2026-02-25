@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Complete — ACBC Survey{% endblock %}
+
+{% block progress %}
+<div class="progress-bar">
+  <div class="progress-fill" style="width: 100%"></div>
+</div>
+<div class="stage-label">Survey Complete</div>
+{% endblock %}
+
+{% block content %}
+<div class="question-panel complete-panel">
+  <div class="complete-icon">&#10003;</div>
+  <h1>Thank you!</h1>
+  <p>Your responses have been recorded as participant <strong>{{ participant_id }}</strong>.</p>
+
+  {% if winner %}
+  <h2>Your most preferred option</h2>
+  <div class="winner-card">
+    <table class="scenario-table">
+      {% for attr_name in attr_names %}
+      <tr>
+        <td class="attr-name">{{ attr_name }}</td>
+        <td class="attr-value">{{ winner.levels[attr_name] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <p class="data-note">Raw data saved to <code>{{ output_dir }}/raw/</code></p>
+
+  <a href="/" class="btn btn-secondary">Start new session</a>
+</div>
+{% endblock %}

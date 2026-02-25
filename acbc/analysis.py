@@ -1,30 +1,35 @@
 """
 Utility estimation and analysis for ACBC survey results.
 
-Three tiers of analysis, all producing the same output format:
-1. **Counting-based** -> frequency of acceptance/choice per level.
-2. **Monotone regression** -> individual-level ordinal utilities via
-   isotonic regression (as in Al-Omari et al., 2017).
-3. **Hierarchical Bayes** -> MNL lower level + multivariate normal upper
-   level, using MCMC Metropolis-Hastings for individual part-worths
-   (as in Sanchez, 2019 / Sawtooth Software).
+Four methods, all producing the same ``AnalysisResult`` output format:
 
-All methods return an ``AnalysisResult`` that the frontend can render.
+1. **Counting-based** — frequency of acceptance/choice per level.
+2. **Monotone regression** — individual-level ordinal utilities via
+   isotonic regression (Al-Omari et al., 2017).
+3. **Bayesian logit** — single-respondent Bayesian MNL with a fixed
+   N(0, I) prior, estimated via Metropolis-Hastings MCMC.
+4. **Hierarchical Bayes (HB)** — true multi-respondent model.
+   Lower level:  beta_i ~ N(alpha, D)  (MNL likelihood per respondent).
+   Upper level:  alpha ~ N(0, Sigma_0), D ~ Inverse-Wishart.
+   Estimated via Gibbs sampling (conjugate alpha/D updates + MH for betas).
+   Requires data from ≥ 2 participants.
+
+scipy is imported **lazily** inside the functions that need it to avoid
+slow macOS Gatekeeper scans of C extensions at module-import time.
+Do NOT add a top-level ``from scipy ...`` import.
 """
 
 # Import modules
 from __future__ import annotations
-import json
+
 import csv
 import io
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 from numpy.typing import NDArray
-
-# scipy is imported lazily inside analyze_hb() to avoid slow macOS
-# Gatekeeper scans of C extensions at module-import time.
-# Do NOT add a top-level `from scipy ...` import here.
 
 # =====================================================================
 # Result container
@@ -37,7 +42,7 @@ class LevelUtility:
     attribute: str
     level: str
     utility: float
-    # For HB: posterior standard deviation
+    # For Bayesian methods: posterior standard deviation
     std: float | None = None
 
 
@@ -53,7 +58,7 @@ class AttributeImportance:
 class AnalysisResult:
     """Full analysis output."""
 
-    method: str  # "counts", "monotone", "hb"
+    method: str  # "counts", "monotone", "bayesian_logit", "hb"
     level_utilities: list[LevelUtility]
     attribute_importances: list[AttributeImportance]
     predicted_winner: dict[str, str] | None = None  # attribute -> best level
@@ -344,7 +349,7 @@ def analyze_monotone(results: dict[str, Any]) -> AnalysisResult:
 
 
 # =====================================================================
-# Tier 3: Hierarchical Bayes (MCMC / Metropolis-Hastings)
+# Shared helpers for Bayesian methods
 # =====================================================================
 
 
@@ -380,51 +385,32 @@ def _mnl_log_likelihood(
     ll = 0.0
     for X_task, chosen_idx in zip(X_choices, y_choices):
         utilities = X_task @ beta
-        # For numerical stability, subtract max
         utilities -= np.max(utilities)
         exp_u = np.exp(utilities)
         ll += utilities[chosen_idx] - np.log(np.sum(exp_u))
-    return -ll  # negative because we minimize
+    return -ll
 
 
-def analyze_hb(
+def _build_choice_data(
     results: dict[str, Any],
-    *,
-    n_iterations: int = 2000,
-    burn_in: int = 500,
-    seed: int | None = None,
-) -> AnalysisResult:
+    attr_names: list[str],
+    attr_levels: dict[str, list[str]],
+    level_to_col: dict[str, int],
+) -> tuple[list[NDArray[np.float64]], list[int]]:
     """
-    Hierarchical Bayes estimation with MCMC (Metropolis-Hastings).
+    Build MNL choice data from tournament rounds + screening pseudo-choices.
 
-    This is a simplified but functional HB implementation suitable for
-    individual-level estimation from a single respondent's ACBC data.
-
-    For a single respondent, this reduces to a Bayesian logit with
-    a normal prior on beta, estimated via random-walk Metropolis-Hastings.
-
-    Reference: Orme (2009), Sawtooth Software HB technical paper;
-               Sanchez (2019) thesis.
+    Returns (X_choices, y_choices) where X_choices[t] is the design matrix
+    for task t and y_choices[t] is the chosen alternative index.
     """
-    from scipy.optimize import minimize  # lazy import — see module docstring
-
-    rng = np.random.default_rng(seed)
-
-    attr_names, attr_levels, level_to_col = _build_attribute_level_index(results)
-    n_params = sum(len(attr_levels[a]) for a in attr_names)
-
-    # Build choice data from the tournament rounds
     tournament_rounds = results.get("tournament_rounds", [])
     choice_responses = results.get("choice_responses", [])
-
-    # Also use screening data: accepted vs. rejected as pseudo-choices
     screening_scenarios = results.get("screening_scenarios", [])
     screening_responses = results.get("screening_responses", [])
 
     X_choices: list[NDArray[np.float64]] = []
     y_choices: list[int] = []
 
-    # Tournament choices (true choices)
     for round_scenarios, response in zip(tournament_rounds, choice_responses):
         if not round_scenarios:
             continue
@@ -435,86 +421,35 @@ def analyze_hb(
         X_choices.append(X_task)
         y_choices.append(response.chosen_index)
 
-    # Screening data as pseudo-choices: for each page, treat accepted
-    # scenarios as "chosen" in pairwise comparisons with rejected ones
     for page_scenarios, response in zip(screening_scenarios, screening_responses):
         accepted_indices = [i for i, acc in response.responses.items() if acc]
         rejected_indices = [i for i, acc in response.responses.items() if not acc]
         for acc_idx in accepted_indices:
             for rej_idx in rejected_indices:
                 X_pair = np.array([
-                    _encode_scenario(page_scenarios[acc_idx].levels, attr_names, attr_levels, level_to_col),
-                    _encode_scenario(page_scenarios[rej_idx].levels, attr_names, attr_levels, level_to_col),
+                    _encode_scenario(
+                        page_scenarios[acc_idx].levels,
+                        attr_names, attr_levels, level_to_col,
+                    ),
+                    _encode_scenario(
+                        page_scenarios[rej_idx].levels,
+                        attr_names, attr_levels, level_to_col,
+                    ),
                 ])
                 X_choices.append(X_pair)
-                y_choices.append(0)  # accepted is always index 0
+                y_choices.append(0)
 
-    if not X_choices:
-        # Fall back to counts if no choice data
-        return analyze_counts(results)
+    return X_choices, y_choices
 
-    # Prior: N(0, I)
-    prior_mean = np.zeros(n_params)
-    prior_cov_inv = np.eye(n_params)  # precision matrix
 
-    # Initialize beta from MLE (or zeros if MLE fails)
-    try:
-        result_opt = minimize(
-            _mnl_log_likelihood,
-            x0=np.zeros(n_params),
-            args=(X_choices, y_choices),
-            method="L-BFGS-B",
-        )
-        beta_current = result_opt.x
-    except Exception:
-        beta_current = np.zeros(n_params)
-
-    # Proposal scale (adapt during burn-in)
-    proposal_scale = 0.1 * np.ones(n_params)
-
-    # MCMC chain storage
-    chain: list[NDArray[np.float64]] = []
-    n_accepted = 0
-
-    for iteration in range(n_iterations):
-        # Propose new beta
-        beta_proposal = beta_current + rng.normal(0, proposal_scale)
-
-        # Log-posterior current
-        ll_current = -_mnl_log_likelihood(beta_current, X_choices, y_choices)
-        lp_current = -0.5 * float(
-            (beta_current - prior_mean) @ prior_cov_inv @ (beta_current - prior_mean)
-        )
-
-        # Log-posterior proposal
-        ll_proposal = -_mnl_log_likelihood(beta_proposal, X_choices, y_choices)
-        lp_proposal = -0.5 * float(
-            (beta_proposal - prior_mean) @ prior_cov_inv @ (beta_proposal - prior_mean)
-        )
-
-        # Acceptance ratio
-        log_ratio = (ll_proposal + lp_proposal) - (ll_current + lp_current)
-        if np.log(rng.random()) < log_ratio:
-            beta_current = beta_proposal
-            n_accepted += 1
-
-        if iteration >= burn_in:
-            chain.append(beta_current.copy())
-
-        # Adapt proposal scale during burn-in
-        if iteration < burn_in and iteration > 0 and iteration % 100 == 0:
-            accept_rate = n_accepted / (iteration + 1)
-            if accept_rate < 0.2:
-                proposal_scale *= 0.8
-            elif accept_rate > 0.5:
-                proposal_scale *= 1.2
-
-    # Posterior mean and std
-    chain_array = np.array(chain)
-    posterior_mean = np.mean(chain_array, axis=0)
-    posterior_std = np.std(chain_array, axis=0)
-
-    # Zero-center within each attribute
+def _beta_to_result(
+    posterior_mean: NDArray[np.float64],
+    posterior_std: NDArray[np.float64],
+    attr_names: list[str],
+    attr_levels: dict[str, list[str]],
+    method: str,
+) -> AnalysisResult:
+    """Convert a posterior beta vector into a zero-centred AnalysisResult."""
     utilities: dict[str, float] = {}
     stds: dict[str, float] = {}
     col = 0
@@ -531,20 +466,280 @@ def analyze_hb(
 
     level_utils = [
         LevelUtility(
-            attribute=attr_name,
-            level=lv,
-            utility=utilities[f"{attr_name}::{lv}"],
-            std=stds[f"{attr_name}::{lv}"],
+            attribute=a, level=lv,
+            utility=utilities[f"{a}::{lv}"],
+            std=stds[f"{a}::{lv}"],
         )
-        for attr_name in attr_names
-        for lv in attr_levels[attr_name]
+        for a in attr_names for lv in attr_levels[a]
     ]
     importances = _compute_importances(attr_names, attr_levels, utilities)
     predicted = _predict_winner(attr_names, attr_levels, utilities)
-
     return AnalysisResult(
-        method="hb",
+        method=method,
         level_utilities=level_utils,
         attribute_importances=importances,
         predicted_winner=predicted,
     )
+
+
+# =====================================================================
+# Tier 3: Bayesian logit (single-respondent)
+# =====================================================================
+
+
+def analyze_bayesian_logit(
+    results: dict[str, Any],
+    *,
+    n_iterations: int = 2000,
+    burn_in: int = 500,
+    seed: int | None = None,
+) -> AnalysisResult:
+    """
+    Bayesian multinomial logit for a **single respondent**.
+
+    Uses a fixed N(0, I) prior on beta, estimated via random-walk
+    Metropolis-Hastings.  This is *not* a hierarchical model — there is
+    no upper-level pooling across respondents.
+
+    For true Hierarchical Bayes with multiple respondents, see
+    :func:`analyze_hb`.
+    """
+    from scipy.optimize import minimize  # lazy — see module docstring
+
+    rng = np.random.default_rng(seed)
+
+    attr_names, attr_levels, level_to_col = _build_attribute_level_index(results)
+    n_params = sum(len(attr_levels[a]) for a in attr_names)
+
+    X_choices, y_choices = _build_choice_data(
+        results, attr_names, attr_levels, level_to_col,
+    )
+    if not X_choices:
+        return analyze_counts(results)
+
+    prior_mean = np.zeros(n_params)
+    prior_cov_inv = np.eye(n_params)
+
+    try:
+        opt = minimize(
+            _mnl_log_likelihood,
+            x0=np.zeros(n_params),
+            args=(X_choices, y_choices),
+            method="L-BFGS-B",
+        )
+        beta_current = opt.x
+    except Exception:
+        beta_current = np.zeros(n_params)
+
+    proposal_scale = 0.1 * np.ones(n_params)
+    chain: list[NDArray[np.float64]] = []
+    n_accepted = 0
+
+    for it in range(n_iterations):
+        beta_proposal = beta_current + rng.normal(0, proposal_scale)
+
+        ll_cur = -_mnl_log_likelihood(beta_current, X_choices, y_choices)
+        lp_cur = -0.5 * float(
+            (beta_current - prior_mean) @ prior_cov_inv @ (beta_current - prior_mean)
+        )
+        ll_prop = -_mnl_log_likelihood(beta_proposal, X_choices, y_choices)
+        lp_prop = -0.5 * float(
+            (beta_proposal - prior_mean) @ prior_cov_inv @ (beta_proposal - prior_mean)
+        )
+
+        if np.log(rng.random()) < (ll_prop + lp_prop) - (ll_cur + lp_cur):
+            beta_current = beta_proposal
+            n_accepted += 1
+
+        if it >= burn_in:
+            chain.append(beta_current.copy())
+
+        if it < burn_in and it > 0 and it % 100 == 0:
+            rate = n_accepted / (it + 1)
+            if rate < 0.2:
+                proposal_scale *= 0.8
+            elif rate > 0.5:
+                proposal_scale *= 1.2
+
+    chain_arr = np.array(chain)
+    return _beta_to_result(
+        np.mean(chain_arr, axis=0),
+        np.std(chain_arr, axis=0),
+        attr_names, attr_levels,
+        method="bayesian_logit",
+    )
+
+
+# =====================================================================
+# Tier 4: True Hierarchical Bayes (multi-respondent Gibbs sampler)
+# =====================================================================
+
+
+def analyze_hb(
+    participant_results: dict[str, dict[str, Any]],
+    *,
+    n_iterations: int = 5000,
+    burn_in: int = 2000,
+    seed: int | None = None,
+) -> tuple[AnalysisResult, dict[str, AnalysisResult]]:
+    """
+    True Hierarchical Bayes estimation via Gibbs sampling.
+
+    Lower level:  y_it | X_it, beta_i  ~  MNL(beta_i)
+    Upper level:  beta_i ~ N(alpha, D)
+    Priors:       alpha ~ N(0, Sigma_0),  D ~ InverseWishart(nu_0, V_0)
+
+    Gibbs sweep (each iteration):
+      (a) Draw alpha | {beta_i}, D           — conjugate Normal update
+      (b) Draw D     | {beta_i}, alpha       — conjugate Inverse-Wishart
+      (c) Draw beta_i | alpha, D, data_i     — MH step per respondent
+
+    Requires data from **≥ 2 participants**.  For a single respondent,
+    use :func:`analyze_bayesian_logit` instead.
+
+    Parameters
+    ----------
+    participant_results : {participant_id: engine_results_dict}
+    n_iterations : total MCMC iterations (including burn-in)
+    burn_in : iterations to discard
+    seed : random seed
+
+    Returns
+    -------
+    (group_result, individual_results)
+        group_result : AnalysisResult with posterior mean of alpha
+        individual_results : {participant_id: AnalysisResult}
+    """
+    from scipy.optimize import minimize  # lazy
+    from scipy.stats import invwishart   # lazy
+
+    rng = np.random.default_rng(seed)
+
+    # Attribute / level structure (same config for all participants)
+    first = next(iter(participant_results.values()))
+    attr_names, attr_levels, level_to_col = _build_attribute_level_index(first)
+    n_params = sum(len(attr_levels[a]) for a in attr_names)
+
+    pids = list(participant_results.keys())
+    n_resp = len(pids)
+    if n_resp < 2:
+        raise ValueError(
+            "Hierarchical Bayes requires ≥ 2 participants.  "
+            "Use analyze_bayesian_logit() for a single respondent."
+        )
+
+    # Build choice data per participant
+    pid_data: dict[str, tuple[list[NDArray[np.float64]], list[int]]] = {}
+    for pid in pids:
+        pid_data[pid] = _build_choice_data(
+            participant_results[pid], attr_names, attr_levels, level_to_col,
+        )
+
+    # ── Priors ──────────────────────────────────────────────────────
+    mu_0 = np.zeros(n_params)
+    Sigma_0 = 100.0 * np.eye(n_params)
+    Sigma_0_inv = np.linalg.inv(Sigma_0)
+    nu_0 = n_params + 3
+    V_0 = np.eye(n_params)
+
+    # ── Initialise betas via MLE per participant ────────────────────
+    betas: dict[str, NDArray[np.float64]] = {}
+    for pid in pids:
+        Xc, yc = pid_data[pid]
+        if Xc:
+            try:
+                opt = minimize(
+                    _mnl_log_likelihood, x0=np.zeros(n_params),
+                    args=(Xc, yc), method="L-BFGS-B",
+                )
+                betas[pid] = opt.x.copy()
+            except Exception:
+                betas[pid] = np.zeros(n_params)
+        else:
+            betas[pid] = np.zeros(n_params)
+
+    beta_matrix = np.array([betas[pid] for pid in pids])
+    alpha = np.mean(beta_matrix, axis=0)
+    D = np.cov(beta_matrix.T) + 0.1 * np.eye(n_params)
+
+    # ── MH proposal scales per participant ──────────────────────────
+    prop_scales = {pid: 0.1 * np.ones(n_params) for pid in pids}
+    accept_cts = {pid: 0 for pid in pids}
+
+    # ── Chain storage ───────────────────────────────────────────────
+    alpha_chain: list[NDArray[np.float64]] = []
+    beta_chains: dict[str, list[NDArray[np.float64]]] = {p: [] for p in pids}
+
+    # ── Gibbs sampler ───────────────────────────────────────────────
+    for it in range(n_iterations):
+        beta_matrix = np.array([betas[pid] for pid in pids])
+
+        # (a) Draw alpha | {beta_i}, D
+        D_reg = D + 1e-6 * np.eye(n_params)
+        D_inv = np.linalg.inv(D_reg)
+        Sigma_star_inv = n_resp * D_inv + Sigma_0_inv
+        Sigma_star = np.linalg.inv(Sigma_star_inv)
+        beta_sum = np.sum(beta_matrix, axis=0)
+        alpha_star = Sigma_star @ (D_inv @ beta_sum + Sigma_0_inv @ mu_0)
+        alpha = rng.multivariate_normal(alpha_star, Sigma_star)
+
+        # (b) Draw D | {beta_i}, alpha
+        diff = beta_matrix - alpha[np.newaxis, :]
+        S = diff.T @ diff
+        D_draw = invwishart.rvs(
+            df=nu_0 + n_resp, scale=V_0 + S, random_state=rng,
+        )
+        D = np.atleast_2d(D_draw)
+
+        # (c) Draw each beta_i via MH
+        D_inv = np.linalg.inv(D + 1e-6 * np.eye(n_params))
+        for pid in pids:
+            Xc, yc = pid_data[pid]
+            b_cur = betas[pid]
+            b_prop = b_cur + rng.normal(0, prop_scales[pid])
+
+            ll_cur = -_mnl_log_likelihood(b_cur, Xc, yc) if Xc else 0.0
+            ll_prop = -_mnl_log_likelihood(b_prop, Xc, yc) if Xc else 0.0
+
+            d_cur = b_cur - alpha
+            d_prop = b_prop - alpha
+            lp_cur = -0.5 * float(d_cur @ D_inv @ d_cur)
+            lp_prop = -0.5 * float(d_prop @ D_inv @ d_prop)
+
+            if np.log(rng.random()) < (ll_prop + lp_prop) - (ll_cur + lp_cur):
+                betas[pid] = b_prop
+                accept_cts[pid] += 1
+
+        # Adapt proposal scales during burn-in
+        if it < burn_in and it > 0 and it % 200 == 0:
+            for pid in pids:
+                rate = accept_cts[pid] / (it + 1)
+                if rate < 0.2:
+                    prop_scales[pid] *= 0.8
+                elif rate > 0.5:
+                    prop_scales[pid] *= 1.2
+
+        # Store post-burn-in samples
+        if it >= burn_in:
+            alpha_chain.append(alpha.copy())
+            for pid in pids:
+                beta_chains[pid].append(betas[pid].copy())
+
+    # ── Posterior summaries ─────────────────────────────────────────
+    alpha_arr = np.array(alpha_chain)
+    group_result = _beta_to_result(
+        np.mean(alpha_arr, axis=0),
+        np.std(alpha_arr, axis=0),
+        attr_names, attr_levels, method="hb",
+    )
+
+    individual_results: dict[str, AnalysisResult] = {}
+    for pid in pids:
+        chain_arr = np.array(beta_chains[pid])
+        individual_results[pid] = _beta_to_result(
+            np.mean(chain_arr, axis=0),
+            np.std(chain_arr, axis=0),
+            attr_names, attr_levels, method="hb",
+        )
+
+    return group_result, individual_results

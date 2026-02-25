@@ -4,12 +4,13 @@
 
 This project is an **open-source implementation of Adaptive Choice-Based Conjoint (ACBC)** — the same methodology that [Sawtooth Software](https://sawtoothsoftware.com/conjoint-analysis/acbc) sells commercially. The goal is to have a fully transparent, customizable engine that can be used for academic research, particularly in decision-making contexts.
 
-The architecture has a deliberate **two-layer separation**:
+The architecture has a deliberate **engine/frontend separation**:
 
-- **The engine** (`acbc/` package) — pure logic, no I/O. It can be driven by any frontend: a CLI today, a web app tomorrow, a lab experiment script, etc.
-- **The frontend** (`cli/` package) — a terminal-based UI. This is the only code that reads from the keyboard or prints to the screen.
+- **The engine** (`acbc/` package) — pure logic, no I/O. It can be driven by any frontend.
+- **CLI frontend** (`cli/` package) — a terminal-based UI using keyboard navigation.
+- **Web frontend** (`web/` package) — a browser-based UI powered by FastAPI with server-side rendered HTML.
 
-This means if you want to deploy this as a web survey, you only need to build a new frontend that calls the same engine API. The survey logic, scenario generation, screening detection, and statistical analysis all stay the same.
+Both frontends call the same engine API (`get_current_question` / `submit_answer`). The survey logic, scenario generation, screening detection, and statistical analysis are shared. Adding another frontend (e.g., a lab experiment script via PsychoPy) requires no changes to the core engine.
 
 ---
 
@@ -22,12 +23,28 @@ pilot-acbc-ddm/
 │   ├── engine.py          # Survey state machine
 │   ├── design.py          # Scenario generation algorithms
 │   ├── screening.py       # Non-compensatory rule detection
-│   └── analysis.py        # Utility estimation (3 methods)
+│   ├── analysis.py        # Utility estimation (4 methods)
+│   └── io.py              # Data persistence (save/load raw + analysis results)
 ├── cli/                   # Terminal frontend (only I/O code)
-│   └── survey.py          # Keyboard-driven survey UI
+│   ├── survey.py          # Keyboard-driven survey UI
+│   └── aggregate.py       # Multi-respondent aggregation command
+├── web/                   # Web frontend (FastAPI + Jinja2)
+│   ├── app.py             # FastAPI application, routes, session management
+│   ├── static/style.css   # Stylesheet
+│   └── templates/         # Server-side rendered HTML templates
+│       ├── base.html      # Shared layout with progress bar
+│       ├── welcome.html   # Start page with survey info
+│       ├── byo.html       # Build Your Own stage
+│       ├── screening.html # Screening stage (4-card grid)
+│       ├── rule_check.html# Unacceptable / Must-have confirmation
+│       ├── choice.html    # Choice Tournament stage
+│       └── complete.html  # Results page
 ├── configs/               # YAML survey definitions
 │   └── demo_laptop.yaml   # Example config
-└── main.py                # Entry point
+├── data/                  # Auto-created output directory
+│   ├── raw/               # One JSON per participant (full responses)
+│   └── analysis/          # One JSON per participant × method (utilities)
+└── main.py                # Entry point (CLI, web server, aggregation)
 ```
 
 ### Dependency Order (foundation to top-level)
@@ -39,8 +56,11 @@ pilot-acbc-ddm/
 4. acbc/design.py           ← depends on models
 5. acbc/engine.py           ← depends on models, design, screening
 6. acbc/analysis.py         ← depends on models (via results dict), numpy, scipy
-7. cli/survey.py            ← depends on engine, models, analysis, questionary, rich
-8. main.py                  ← depends on cli.survey
+7. acbc/io.py               ← depends on models (for deserialization)
+8. cli/survey.py            ← depends on engine, models, analysis, io, questionary, rich
+9. cli/aggregate.py         ← depends on io, analysis, numpy, rich
+10. web/app.py              ← depends on engine, models, io, fastapi, jinja2
+11. main.py                 ← depends on cli.survey, cli.aggregate, web.app, uvicorn
 ```
 
 ### External Dependencies
@@ -52,7 +72,11 @@ pilot-acbc-ddm/
 | **questionary** | Keyboard-driven terminal prompts. Provides `select()` (arrow keys + Enter) for all user choices. Built on top of `prompt_toolkit`. | `cli/survey.py`  |
 | **rich**       | Formatted terminal output — colored panels for stage headers, tables for side-by-side scenario comparison, bar charts for results. | `cli/survey.py`  |
 | **numpy**      | Numerical arrays for the analysis module — stores utility vectors, computes means/standard deviations, matrix operations for the MNL design matrix. | `acbc/analysis.py` |
-| **scipy**      | Specifically `scipy.optimize.minimize` for L-BFGS-B optimization — used to find the MLE starting point for the HB analysis. Imported lazily (only when HB is selected). | `acbc/analysis.py` |
+| **scipy**      | Specifically `scipy.optimize.minimize` for L-BFGS-B optimization (MLE starting point) and `scipy.stats.invwishart` for the HB covariance prior. Imported lazily (only when Bayesian methods are selected). | `acbc/analysis.py` |
+| **fastapi**    | Python web framework for the browser-based survey. Handles HTTP routing, form parsing, and session management via cookies. | `web/app.py`       |
+| **uvicorn**    | ASGI server that runs the FastAPI application.                                                                             | `main.py`          |
+| **jinja2**     | Server-side HTML templating. Each survey stage has its own template rendered with the current question data.                | `web/app.py`, `web/templates/` |
+| **python-multipart** | Required by FastAPI for parsing HTML form submissions (radio buttons, checkboxes).                                    | `web/app.py`       |
 
 ---
 
@@ -65,7 +89,7 @@ Everything begins with a YAML config file. Example (`configs/demo_laptop.yaml`):
 ```yaml
 name: "Decision-Making Under Risk Preferences"
 description: >
-  A simple demo survey exploring preferences when making decisions under risk.
+  A simple demo survey exploring preferences when making decisions under profit/loss.
 
 attributes:
   - name: Reward Size
@@ -159,20 +183,58 @@ This ideal is the anchor for everything that follows. It transitions to screenin
 
 ---
 
-### 4. Scenario Generation (the "adaptive" part)
+### 4. Scenario Generation — Near-Neighbour Design (the "adaptive" part)
 
 When BYO completes, the engine calls `generate_screening_scenarios()` in `acbc/design.py`. This is where the "adaptive" in ACBC happens.
 
-**The algorithm:**
+A "near-neighbour" is a scenario that differs from the respondent's BYO ideal in only **1 to 3 attributes**. The fewer attributes changed, the "nearer" the neighbour. This keeps screening scenarios personally relevant — they are variations of what the respondent already said they want, not random combinations.
 
-1. Start from the BYO ideal.
-2. Generate candidate scenarios by **randomly swapping 1–3 attributes** to different levels. The `_random_swap()` function picks which attributes to change and what to change them to.
-3. Swaps are weighted: 45% chance of changing 1 attribute, 35% for 2, 20% for 3. This keeps scenarios **near** the ideal (most differ in just 1–2 attributes), which is the "near-neighbour" approach described in the ACBC literature.
-4. A **level-balance mechanism** tracks how often each level has appeared across all generated scenarios. Candidates that would cover under-represented levels are preferred. This approximates the experimental design principles of level balance and minimal overlap from conjoint theory.
-5. Duplicates and exact copies of the ideal are excluded.
-6. The scenarios are chunked into pages of 4 (configurable).
+#### Step 1: Random swap
 
-For a config with 5 pages × 4 scenarios, this generates 20 screening scenarios, each close to but different from the ideal.
+The `_random_swap()` function takes the ideal and creates a variant by picking *n* attributes at random and changing each to a different level of that attribute:
+
+```python
+# Example: ideal = {Reward Size: 120, Variability: Low, Worst Case: 0, Timing: immediately}
+# 1-swap might produce: {Reward Size: 120, Variability: Low, Worst Case: 0, Timing: in one month}
+# 2-swap might produce: {Reward Size: 60,  Variability: Low, Worst Case: -25, Timing: immediately}
+```
+
+For each swapped attribute, the new level is chosen uniformly at random from the alternatives (excluding the ideal level for that attribute).
+
+#### Step 2: Weighted swap count
+
+The number of attributes to swap is drawn randomly with weights:
+
+| Swaps | Probability | Effect |
+|-------|-------------|--------|
+| 1     | 45%         | Very near the ideal — only one thing is different |
+| 2     | 35%         | Moderately near — forces a trade-off between two attributes |
+| 3     | 20%         | Further out — tests how the respondent weighs multiple changes |
+
+This keeps most scenarios close to the ideal, with a few more diverse ones mixed in.
+
+#### Step 3: Level-balance bias
+
+A coverage score tracks how often each level has appeared across all scenarios generated so far. Candidates that would feature under-represented levels are more likely to be accepted:
+
+```python
+coverage_score = sum(level_counts[attr][candidate.levels[attr]] for attr in candidate.levels)
+accept_prob = 1.0 / (1.0 + coverage_score * 0.3)
+```
+
+A candidate whose levels have already appeared many times gets a high coverage score → low acceptance probability → more likely to be rejected in favour of one that covers under-seen levels. This approximates the level-balance property from experimental design theory (each level should appear roughly equally often across the design).
+
+#### Step 4: Deduplication
+
+Exact duplicates and copies of the ideal itself are tracked via hashing and excluded.
+
+#### Step 5: Chunking
+
+The generated scenarios are split into pages of `scenarios_per_page` (default 4). For a config with 5 pages × 4 scenarios, this produces 20 screening scenarios.
+
+#### Limitations and future improvement
+
+This is a **stochastic** near-neighbour approach, not a deterministic optimal experimental design. A full D-optimal or balanced incomplete block design (like Sawtooth Software uses) would enumerate all possible near-neighbours, compute a design efficiency metric, and select the optimal subset. The current approach is simpler but produces reasonable level balance for a pilot. For a production system, this could be upgraded to a proper optimal design algorithm (e.g., modified Federov or coordinate-exchange).
 
 ---
 
@@ -246,9 +308,13 @@ In a typical run with ~9 valid scenarios in the pool, this takes about 4 rounds:
 
 ### 8. Analysis
 
-After the survey, all collected data flows to `acbc/analysis.py`. Three methods are available, all producing the same output format (`AnalysisResult` containing level utilities, attribute importances, and a predicted ideal product).
+After the survey, all collected data flows to `acbc/analysis.py`. All methods use **both screening and tournament data** (not just the tournament). The BYO stage is not directly used in analysis — it serves only as the anchor for scenario generation.
 
-#### Tier 1: Counting-Based
+Four methods are available. The first three work on a single respondent; the fourth requires multiple respondents.
+
+**Attribute importance** is computed the same way across all methods: take the range (max utility − min utility) within each attribute, then normalize so importances sum to 100%. A wider range = more important to the respondent.
+
+#### Tier 1: Counting-Based (`analyze_counts`)
 
 The simplest method. For each level:
 
@@ -256,31 +322,56 @@ The simplest method. For each level:
 - Add a bonus for each time the level appeared in a tournament-winning scenario
 - Zero-center within each attribute (so utilities sum to 0 per attribute)
 
-**Attribute importance** is computed the same way across all three methods: take the range (max utility − min utility) within each attribute, then normalize so all importances sum to 100%. A wider range means more discriminating power = more important to the respondent.
-
-#### Tier 2: Monotone Regression
+#### Tier 2: Monotone Regression (`analyze_monotone`)
 
 Same raw scores as counting, but applies **isotonic regression** (Pool Adjacent Violators algorithm) to enforce monotone ordering. This smooths out noise: if the raw data suggests level A > B > C but B and C are nearly tied, isotonic regression can merge them.
 
 This is the method used in Al-Omari et al. (2017) for individual-level estimation with Sawtooth Software's built-in monotone regression.
 
-#### Tier 3: Hierarchical Bayes (MCMC)
+#### Tier 3: Bayesian Logit (`analyze_bayesian_logit`)
 
-The most statistically sophisticated. This is a Bayesian logit model estimated with MCMC:
+A **single-respondent** Bayesian multinomial logit model estimated with MCMC. This is *not* a hierarchical model — it uses a fixed N(0, I) prior with no pooling across respondents.
 
-1. **Encode the data**: Each scenario becomes a dummy-coded vector (a 1 for each level present, 0 otherwise). Tournament choices become direct choice observations. Screening accept/reject pairs are converted to pseudo-choices (each accepted scenario "beats" each rejected scenario on the same page).
+1. **Encode the data**: Each scenario becomes a dummy-coded vector. Tournament choices become direct choice observations. Screening accept/reject pairs are converted to pseudo-choices (each accepted scenario "beats" each rejected scenario on the same page).
 
-2. **Find a starting point**: Use Maximum Likelihood Estimation (L-BFGS-B optimizer from scipy) on the Multinomial Logit model to get initial beta values.
+2. **Find a starting point**: MLE via L-BFGS-B on the MNL log-likelihood.
 
-3. **Run Metropolis-Hastings MCMC** for 2000 iterations:
+3. **Run Metropolis-Hastings MCMC** (2000 iterations, 500 burn-in):
    - Propose a new beta by adding random noise to the current one
-   - Compute the log-posterior (log-likelihood from MNL + log-prior from N(0, I))
-   - Accept the proposal if it improves the posterior, otherwise accept with probability proportional to the improvement ratio
-   - During the first 500 iterations (burn-in), adapt the proposal scale to target a 20–50% acceptance rate
+   - Accept/reject using log-posterior = log-likelihood(MNL) + log-prior(N(0, I))
+   - Adapt proposal scale during burn-in to target 20–50% acceptance rate
 
-4. **Extract results**: The posterior mean of the chain (after discarding burn-in) gives the part-worth utilities. The posterior standard deviation gives uncertainty estimates.
+4. **Extract results**: Posterior mean = part-worth utilities; posterior SD = uncertainty.
 
-This is a simplified version of the Sawtooth Software HB algorithm described in the Sanchez (2019) thesis. For a single respondent it is effectively a Bayesian logit with a normal prior.
+#### Tier 4: True Hierarchical Bayes (`analyze_hb`) — Multi-Respondent
+
+The full hierarchical model, requiring **≥ 2 participants**. This is the approach used by Sawtooth Software, implemented here via Gibbs sampling.
+
+**Model:**
+
+```
+Lower level:   y_it | X_it, beta_i  ~  MNL(beta_i)      (data likelihood per respondent)
+               beta_i ~ N(alpha, D)                       (individual betas drawn from group)
+
+Upper level:   alpha ~ N(0, 100·I)                        (diffuse prior on group mean)
+               D ~ InverseWishart(nu_0, I)                (prior on group covariance)
+```
+
+**Gibbs sampler** (5000 iterations, 2000 burn-in):
+
+1. **(a) Draw alpha | {beta_i}, D** — Conjugate multivariate normal update. The group mean is re-estimated conditional on all current individual betas and the covariance D.
+
+2. **(b) Draw D | {beta_i}, alpha** — Conjugate Inverse-Wishart update. The group covariance is re-estimated from the scatter of individual betas around the current alpha.
+
+3. **(c) Draw each beta_i | alpha, D, data_i** — Metropolis-Hastings step per respondent. Each individual's beta is proposed and accepted/rejected using their MNL likelihood *and* the current group prior N(alpha, D).
+
+**Key benefit — "borrowing strength"**: Participants with sparse or noisy data get pulled toward the group mean. This stabilises individual-level estimates, especially with small N. The group prior acts as a data-driven regularizer rather than a fixed one (as in the Bayesian logit).
+
+**Returns both**:
+- **Group-level result**: posterior mean of alpha (the population preference structure)
+- **Individual-level results**: posterior mean of each beta_i (shrinkage-adjusted individual preferences)
+
+The aggregation command runs this automatically: `python main.py aggregate --method hb`
 
 ---
 
@@ -319,6 +410,109 @@ YAML config ──→ SurveyConfig ──→ ACBCEngine
 
 ---
 
+### 10. Web Frontend
+
+The web interface (`web/app.py`) provides a browser-based survey using the same engine as the CLI. It is built with **FastAPI** (Python web framework) and **Jinja2** (HTML templating).
+
+#### How it works
+
+```
+Browser ←→ FastAPI (web/app.py) ←→ ACBCEngine (acbc/)
+```
+
+1. **Session management**: When a respondent starts the survey, the server creates an `ACBCEngine` instance and stores it in an in-memory dictionary keyed by a UUID session cookie. This means each browser tab gets its own independent survey session.
+
+2. **Request/response cycle**: The frontend is server-side rendered — no JavaScript framework. Each page is a full HTML page generated from a Jinja2 template. The flow is:
+   - `GET /` — Welcome page with survey info
+   - `POST /start` — Creates engine, sets session cookie, redirects to first question
+   - `GET /question` — Reads the engine's current question, renders the appropriate template (BYO, screening, rule check, or choice)
+   - `POST /answer` — Parses the HTML form submission, calls `engine.submit_answer()`, redirects back to `/question`
+   - `GET /complete` — Shows the tournament winner and saves raw data
+
+3. **Templates**: Each survey stage has its own HTML template that extends `base.html` (shared layout with progress bar). The screening template displays four scenario cards in a responsive grid; the choice template uses clickable cards with visual selection feedback.
+
+#### Running the web server
+
+```bash
+uv run python main.py serve                          # Default: http://127.0.0.1:8000
+uv run python main.py serve --port 9000              # Custom port
+uv run python main.py serve --config my_survey.yaml  # Custom config
+```
+
+Raw data is auto-saved when the respondent completes the survey, just like the CLI. The web frontend does not currently display analysis results in the browser — it saves the raw data for later analysis via the `aggregate` command or programmatic use.
+
+---
+
+## Data Persistence and Multi-Participant Support
+
+### Automatic Data Saving
+
+Every survey session automatically saves two types of files:
+
+```
+data/
+├── raw/                             # One file per participant session
+│   ├── P001_20260213T143000Z.json   # Full raw responses
+│   └── P002_20260213T150000Z.json
+└── analysis/                        # One file per participant × method
+    ├── P001_counts_20260213T143005Z.json
+    ├── P001_hb_20260213T143010Z.json
+    └── P002_counts_20260213T150005Z.json
+```
+
+**Raw data files** (`data/raw/`) contain the complete survey session for a participant:
+- Participant ID and timestamp
+- The config used (so you can verify everyone saw the same survey)
+- BYO ideal selections
+- All screening scenarios shown and how each was responded to (accept/reject)
+- Confirmed non-compensatory rules (unacceptable/must-have)
+- All choice tournament rounds and which option was chosen each time
+- The tournament winner
+- Per-level shown/accepted/chosen counts
+
+**Analysis files** (`data/analysis/`) contain the computed results:
+- Level utilities (part-worths) per attribute
+- Attribute importances (as percentages)
+- Predicted ideal product
+
+This separation means you always have the raw responses to re-analyze later with different methods or parameters, independently of whatever analysis was displayed during the session.
+
+### Participant ID
+
+Each session is tagged with a participant ID. IDs are **auto-generated** sequentially by scanning existing files in `data/raw/` (P001, P002, P003, ...). You can also override the auto-generated ID:
+- CLI: `python main.py --participant MY_ID`
+- Web: IDs are always auto-generated per session
+
+### Multi-Respondent Aggregation
+
+After collecting data from multiple participants, you can compute group-level statistics:
+
+```bash
+python main.py aggregate                      # Uses ./data directory
+python main.py aggregate --data-dir ./my_data # Custom directory
+python main.py aggregate --method counts      # Only counting-based
+```
+
+The aggregation command:
+1. Loads all raw JSON files from `data/raw/`
+2. Re-runs the selected analysis method(s) on each participant's raw data
+3. Computes group-level statistics:
+   - **Mean utility** and **standard deviation** for each level across participants
+   - **Mean importance** and **standard deviation** for each attribute
+   - **Mode predicted ideal** — the most frequently predicted best level per attribute
+
+This gives you a complete picture of both individual-level and group-level preferences.
+
+### Custom Output Directory
+
+Use `--output-dir` to change where data is saved (default is `./data`):
+
+```bash
+python main.py --output-dir /path/to/my/study/data
+```
+
+---
+
 ## What Makes This a Strong Pilot
 
 1. **Transparent and reproducible**: Unlike Sawtooth's black box, every algorithm is visible and auditable. You can explain exactly how scenarios were generated, how rules were detected, and how utilities were estimated.
@@ -327,7 +521,7 @@ YAML config ──→ SurveyConfig ──→ ACBCEngine
 
 3. **Multiple analysis tiers**: You can show that the basic counting method and the full Bayesian method produce consistent results, or explore where they diverge — which is itself interesting for decision-making research.
 
-4. **Frontend-agnostic**: The engine API (`get_current_question` / `submit_answer`) can be wired to a web interface for online studies, or embedded in a lab experiment script (e.g., PsychoPy), with zero changes to the core logic.
+4. **Two frontends included**: Both a CLI (for development/testing) and a web interface (for online data collection) ship out of the box, demonstrating the engine's frontend-agnostic design. Adding another frontend (e.g., PsychoPy for lab experiments) requires no changes to the core logic.
 
 5. **Captures both compensatory and non-compensatory preferences**: The unacceptable/must-have detection explicitly models non-compensatory decision heuristics, which is directly relevant to DDM research.
 
